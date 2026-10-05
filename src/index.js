@@ -1,6 +1,8 @@
-import "dotenv/config";
 import express from "express";
 import cors from "cors";
+
+import { connectToDatabase } from "./config/db.js";
+import artworksRoutes from "./routes/artworksRoutes.js";
 
 const app = express();
 
@@ -23,6 +25,21 @@ app.get("/", (req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`ArtHub server is running on port ${port}`);
-});
+app.use("/artworks", artworksRoutes);
+
+async function startServer() {
+  try {
+    await connectToDatabase();
+
+    app.listen(port, () => {
+      console.log(`ArtHub server is running on port ${port}`);
+    });
+  } catch (error) {
+    console.error("Failed to start ArtHub server:");
+    console.error(error.message);
+
+    process.exit(1);
+  }
+}
+
+startServer();
