@@ -1,0 +1,12 @@
+import { RESERVED_AUTHORIZATION_PARAMS, RESERVED_AUTHORIZATION_PARAMS_SET } from "./create-authorization-url.mjs";
+import * as z from "zod";
+//#region src/oauth2/authorization-params.ts
+/**
+* Zod schema for the `additionalParams` field on social sign-in and
+* account-linking request bodies. Rejects any key reserved by the
+* authorization-URL builder (see `RESERVED_AUTHORIZATION_PARAMS`), so
+* a caller cannot overwrite `state`, PKCE, `redirect_uri`, etc.
+*/
+const additionalAuthorizationParamsSchema = z.record(z.string(), z.string()).refine((value) => !Object.keys(value).some((key) => RESERVED_AUTHORIZATION_PARAMS_SET.has(key)), { message: `additionalParams cannot include reserved OAuth parameters: ${RESERVED_AUTHORIZATION_PARAMS.join(", ")}` }).meta({ description: "Extra query parameters to append to the provider authorization URL (e.g. Cognito identity_provider, Google hd)." }).optional();
+//#endregion
+export { additionalAuthorizationParamsSchema };

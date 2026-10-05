@@ -1,0 +1,62 @@
+import { InferOptionSchema } from "../../types/plugins.mjs";
+import { WalletAddressSchema, schema } from "./schema.mjs";
+import { ENSLookupArgs, ENSLookupResult, SIWEVerifyMessageArgs } from "./types.mjs";
+import * as _$better_call0 from "better-call";
+import * as z from "zod";
+
+//#region src/plugins/siwe/index.d.ts
+declare module "@better-auth/core" {
+  interface BetterAuthPluginRegistry<AuthOptions, Options> {
+    siwe: {
+      creator: typeof siwe;
+    };
+  }
+}
+interface SIWEPluginOptions {
+  domain: string;
+  emailDomainName?: string | undefined;
+  anonymous?: boolean | undefined;
+  getNonce: () => Promise<string>;
+  verifyMessage: (args: SIWEVerifyMessageArgs) => Promise<boolean>;
+  ensLookup?: ((args: ENSLookupArgs) => Promise<ENSLookupResult>) | undefined;
+  schema?: InferOptionSchema<typeof schema> | undefined;
+}
+declare const siwe: (options: SIWEPluginOptions) => {
+  id: "siwe";
+  version: string;
+  schema: WalletAddressSchema;
+  endpoints: {
+    getSiweNonce: _$better_call0.StrictEndpoint<"/siwe/nonce" | "/siwe/get-nonce", {
+      method: "POST";
+      body: z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
+    }, {
+      nonce: string;
+    }>;
+    getNonce: _$better_call0.StrictEndpoint<"/siwe/nonce" | "/siwe/get-nonce", {
+      method: "POST";
+      body: z.ZodOptional<z.ZodObject<{}, z.core.$strict>>;
+    }, {
+      nonce: string;
+    }>;
+    verifySiweMessage: _$better_call0.StrictEndpoint<"/siwe/verify", {
+      method: "POST";
+      body: z.ZodObject<{
+        message: z.ZodString;
+        signature: z.ZodString;
+        email: z.ZodOptional<z.ZodEmail>;
+      }, z.core.$strict>;
+      requireRequest: true;
+    }, {
+      token: string;
+      success: boolean;
+      user: {
+        id: string;
+        walletAddress: string;
+        chainId: number;
+      };
+    }>;
+  };
+  options: SIWEPluginOptions;
+};
+//#endregion
+export { SIWEPluginOptions, siwe };

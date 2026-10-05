@@ -1,0 +1,685 @@
+import { getSchema } from "./get-schema.mjs";
+import { getAuthTables } from "@better-auth/core/db";
+import { createLogger } from "@better-auth/core/env";
+import { BetterAuthError } from "@better-auth/core/error";
+import { createKyselyAdapter, getMssqlSchema, getPostgresSchema, toIntrospectedTables, toPhysicalSchema } from "@better-auth/kysely-adapter";
+import { initGetFieldName, initGetModelName } from "@better-auth/core/db/adapter";
+import { diffSchema, formatSchemaFinding, getDatabaseFieldIndexName, getDatabaseIndexStringLength, getPortableDatabaseIdentifierKey, invalidateSchemaChecks } from "@better-auth/core/db/internal";
+import { sql } from "kysely";
+//#region src/db/get-migration.ts
+const map = {
+	postgres: {
+		string: [
+			"character varying",
+			"varchar",
+			"text",
+			"uuid"
+		],
+		number: [
+			"int4",
+			"integer",
+			"bigint",
+			"smallint",
+			"numeric",
+			"real",
+			"double precision"
+		],
+		boolean: ["bool", "boolean"],
+		date: [
+			"timestamptz",
+			"timestamp",
+			"date"
+		],
+		json: ["json", "jsonb"]
+	},
+	mysql: {
+		string: [
+			"varchar",
+			"text",
+			"uuid"
+		],
+		number: [
+			"integer",
+			"int",
+			"bigint",
+			"smallint",
+			"decimal",
+			"float",
+			"double"
+		],
+		boolean: ["boolean", "tinyint"],
+		date: [
+			"timestamp",
+			"datetime",
+			"date"
+		],
+		json: ["json"]
+	},
+	sqlite: {
+		string: ["TEXT"],
+		number: [
+			"INTEGER",
+			"REAL",
+			"BIGINT"
+		],
+		boolean: ["INTEGER", "BOOLEAN"],
+		date: ["DATE", "INTEGER"],
+		json: ["TEXT"]
+	},
+	mssql: {
+		string: [
+			"varchar",
+			"nvarchar",
+			"uniqueidentifier"
+		],
+		number: [
+			"int",
+			"bigint",
+			"smallint",
+			"decimal",
+			"float",
+			"double"
+		],
+		boolean: ["bit", "smallint"],
+		date: [
+			"datetime2",
+			"date",
+			"datetime"
+		],
+		json: ["varchar", "nvarchar"]
+	}
+};
+function createDatabaseIndexKey(tableName, indexName) {
+	return `${getPortableDatabaseIdentifierKey(tableName)}\u0000${getPortableDatabaseIdentifierKey(indexName)}`;
+}
+function createDatabaseColumnKey(tableName, columnName) {
+	return `${tableName}\u0000${columnName}`;
+}
+function databaseIndexMatches(existing, configured) {
+	return existing.unique === (configured.unique ?? false) && existing.validFullColumns && existing.columns.length === configured.columns.length && existing.columns.every((column, position) => column === configured.columns[position]);
+}
+function databaseValueIsTrue(value) {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number") return value !== 0;
+	return value === "1" || value?.toLowerCase() === "true" || value === "t";
+}
+function toDatabaseIndexMap(indexes) {
+	return new Map(indexes.map((index) => {
+		const columns = [...index.columns].sort((left, right) => left.position - right.position);
+		return [createDatabaseIndexKey(index.table, index.name), {
+			columns: columns.flatMap((column) => column.name === null ? [] : [column.name]),
+			name: index.name,
+			table: index.table,
+			unique: index.unique,
+			validFullColumns: index.valid && !index.partial && columns.length > 0 && columns.every((column) => column.name !== null && column.fullLength)
+		}];
+	}));
+}
+async function getDatabaseIndexMap(db, target, tableNames, introspectIndexes) {
+	if (introspectIndexes) return toDatabaseIndexMap(await introspectIndexes(tableNames));
+	let rows;
+	switch (target.type) {
+		case "sqlite":
+			rows = (await sql`
+				SELECT
+					tables.name AS "tableName",
+					index_list.name AS "indexName",
+					index_info.name AS "columnName",
+					index_list."unique" AS "isUnique",
+					index_list.partial AS "isPartial",
+					index_info.seqno AS "columnPosition"
+				FROM sqlite_master AS tables
+				INNER JOIN pragma_index_list(tables.name) AS index_list
+				INNER JOIN pragma_index_info(index_list.name) AS index_info
+				WHERE tables.type = 'table'
+			`.execute(db)).rows;
+			break;
+		case "postgres":
+			rows = (await sql`
+				SELECT
+					table_class.relname AS "tableName",
+					index_class.relname AS "indexName",
+					index_attribute.attname AS "columnName",
+					index_data.indisunique AS "isUnique",
+					index_data.indisvalid AS "isValid",
+					(index_data.indpred IS NOT NULL) AS "isPartial",
+					index_column.ordinality AS "columnPosition"
+				FROM pg_class AS table_class
+				INNER JOIN pg_namespace AS table_namespace
+					ON table_namespace.oid = table_class.relnamespace
+				INNER JOIN pg_index AS index_data
+					ON index_data.indrelid = table_class.oid
+				INNER JOIN pg_class AS index_class
+					ON index_class.oid = index_data.indexrelid
+				INNER JOIN LATERAL unnest(index_data.indkey)
+					WITH ORDINALITY AS index_column(attribute_number, ordinality)
+					ON TRUE
+				LEFT JOIN pg_attribute AS index_attribute
+					ON index_attribute.attrelid = table_class.oid
+					AND index_attribute.attnum = index_column.attribute_number
+				WHERE table_namespace.nspname = ${target.schema}
+					AND table_class.relkind = 'r'
+					AND index_column.ordinality <= index_data.indnkeyatts
+			`.execute(db)).rows;
+			break;
+		case "mysql":
+			rows = (await sql`
+				SELECT
+					table_name AS tableName,
+					index_name AS indexName,
+					column_name AS columnName,
+					non_unique AS nonUnique,
+					seq_in_index AS columnPosition,
+					sub_part AS prefixLength,
+					COALESCE(LOWER(comment) = 'disabled', FALSE) AS isDisabled
+				FROM information_schema.statistics
+				WHERE table_schema = DATABASE()
+			`.execute(db)).rows;
+			break;
+		case "mssql":
+			rows = (await sql`
+				SELECT
+					tables.name AS "tableName",
+					indexes.name AS "indexName",
+					columns.name AS "columnName",
+					indexes.is_unique AS "isUnique",
+					indexes.is_disabled AS "isDisabled",
+					indexes.is_hypothetical AS "isHypothetical",
+					indexes.has_filter AS "isPartial",
+					index_columns.key_ordinal AS "columnPosition"
+				FROM sys.indexes AS indexes
+				INNER JOIN sys.tables AS tables
+					ON indexes.object_id = tables.object_id
+				INNER JOIN sys.schemas AS table_schemas
+					ON table_schemas.schema_id = tables.schema_id
+				INNER JOIN sys.index_columns AS index_columns
+					ON index_columns.object_id = indexes.object_id
+					AND index_columns.index_id = indexes.index_id
+				INNER JOIN sys.columns AS columns
+					ON columns.object_id = index_columns.object_id
+					AND columns.column_id = index_columns.column_id
+				WHERE table_schemas.name = ${target.schema}
+					AND indexes.name IS NOT NULL
+					AND index_columns.key_ordinal > 0
+			`.execute(db)).rows;
+			break;
+	}
+	const indexMetadata = /* @__PURE__ */ new Map();
+	for (const row of rows) {
+		const table = row.tableName ?? row.table_name ?? row.TABLE_NAME ?? row.tablename ?? row.tbl_name;
+		const name = row.indexName ?? row.index_name ?? row.INDEX_NAME ?? row.name;
+		const column = row.columnName ?? row.column_name ?? row.COLUMN_NAME;
+		if (!table || !name) continue;
+		const key = createDatabaseIndexKey(table, name);
+		const nonUnique = row.nonUnique ?? row.non_unique ?? row.NON_UNIQUE;
+		const unique = nonUnique === void 0 ? databaseValueIsTrue(row.isUnique ?? row.is_unique) : !databaseValueIsTrue(nonUnique);
+		const position = Number(row.columnPosition ?? row.column_position ?? row.keyOrdinal ?? row.key_ordinal ?? row.ordinality ?? row.seqInIndex ?? row.seq_in_index ?? row.SEQ_IN_INDEX ?? row.seqno ?? 0);
+		const indexColumn = {
+			fullLength: column !== void 0 && column !== null && (row.prefixLength === void 0 || row.prefixLength === null),
+			name: column ?? null,
+			position
+		};
+		const partial = databaseValueIsTrue(row.isPartial);
+		const valid = !databaseValueIsTrue(row.isDisabled) && !databaseValueIsTrue(row.isHypothetical) && (row.isValid === void 0 || databaseValueIsTrue(row.isValid));
+		const existing = indexMetadata.get(key);
+		indexMetadata.set(key, existing ? {
+			...existing,
+			columns: [...existing.columns, indexColumn],
+			partial: existing.partial || partial,
+			valid: existing.valid && valid
+		} : {
+			columns: [indexColumn],
+			name,
+			partial,
+			table,
+			unique,
+			valid
+		});
+	}
+	return toDatabaseIndexMap([...indexMetadata.values()]);
+}
+async function getDatabaseColumnBounds(db, target) {
+	let rows;
+	switch (target.type) {
+		case "postgres":
+		case "sqlite": return /* @__PURE__ */ new Map();
+		case "mysql":
+			rows = (await sql`
+				SELECT
+					table_name AS tableName,
+					column_name AS columnName,
+					character_octet_length AS maxIndexBytes
+				FROM information_schema.columns
+				WHERE table_schema = DATABASE()
+			`.execute(db)).rows;
+			break;
+		case "mssql":
+			rows = (await sql`
+				SELECT
+					tables.name AS "tableName",
+					columns.name AS "columnName",
+					columns.max_length AS "maxIndexBytes"
+				FROM sys.columns AS columns
+				INNER JOIN sys.tables AS tables
+					ON tables.object_id = columns.object_id
+				INNER JOIN sys.schemas AS table_schemas
+					ON table_schemas.schema_id = tables.schema_id
+				WHERE table_schemas.name = ${target.schema}
+			`.execute(db)).rows;
+			break;
+	}
+	const bounds = /* @__PURE__ */ new Map();
+	for (const row of rows) {
+		const table = row.tableName ?? row.TABLE_NAME;
+		const column = row.columnName ?? row.COLUMN_NAME;
+		if (!table || !column) continue;
+		const maxIndexBytes = Number(row.maxIndexBytes ?? row.MAX_INDEX_BYTES ?? -1);
+		bounds.set(createDatabaseColumnKey(table, column), { maxIndexBytes: maxIndexBytes < 0 ? null : maxIndexBytes });
+	}
+	return bounds;
+}
+function assertExistingTableIndexFits({ columnBounds, dbType, existingColumns, fields, indexes, index, table }) {
+	const byteBudget = dbType === "mysql" ? 3072 : 1700;
+	let requiredBytes = 0;
+	for (const column of index.columns) {
+		const field = fields[column];
+		if (!field) continue;
+		if (field.type === "string" || Array.isArray(field.type)) {
+			if (!existingColumns.has(column)) {
+				const generatedLength = getDatabaseIndexStringLength({
+					columnName: column,
+					dialect: dbType,
+					fields,
+					indexes
+				});
+				requiredBytes += (generatedLength ?? 0) * (dbType === "mysql" ? 4 : 1);
+				continue;
+			}
+			const bound = columnBounds.get(createDatabaseColumnKey(table, column));
+			if (!bound?.maxIndexBytes) throw new BetterAuthError(`Cannot create database index "${index.name}" on existing table "${table}" because column "${column}" is not bounded for ${dbType === "mysql" ? "MySQL" : "SQL Server"}. Change it to a bounded string column, resolve oversized values, then run the migration again.`);
+			requiredBytes += bound.maxIndexBytes;
+		} else requiredBytes += 16;
+	}
+	if (requiredBytes > byteBudget) throw new BetterAuthError(`Cannot create database index "${index.name}" on existing table "${table}" because its columns can exceed ${dbType === "mysql" ? "MySQL" : "SQL Server"}'s ${byteBudget}-byte index-key limit. Bound the indexed string columns to the generated schema lengths, resolve oversized values, then run the migration again.`);
+}
+/**
+* Thrown when {@link getMigrations} refuses to add a required column with no
+* default value to a populated table. Distinct from the plain
+* {@link BetterAuthError} thrown for index-definition conflicts, so callers
+* can tell the two apart without matching on message text.
+*/
+var UnsafeMigrationError = class extends BetterAuthError {};
+function hasTimestampColumnDefault(field, dbType) {
+	return field.type === "date" && typeof field.defaultValue === "function" && (dbType === "postgres" || dbType === "mysql" || dbType === "mssql");
+}
+function hasStaticColumnDefault(field) {
+	return !(field.unique && field.required === false) && (field.type === "string" || field.type === "number" || field.type === "boolean") && field.defaultValue !== void 0 && field.defaultValue !== null && typeof field.defaultValue !== "function";
+}
+async function tableHasRows(db, dbType, table) {
+	const probe = db.selectFrom(table).select(sql`1`.as("present"));
+	return (await (dbType === "mssql" ? probe.top(1) : probe.limit(1)).execute()).length > 0;
+}
+function matchType(columnDataType, fieldType, dbType) {
+	function normalize(type) {
+		return type.toLowerCase().split("(")[0].trim();
+	}
+	if (fieldType === "string[]" || fieldType === "number[]") return columnDataType.toLowerCase().includes("json");
+	const types = map[dbType];
+	return (Array.isArray(fieldType) ? types["string"].map((t) => t.toLowerCase()) : types[fieldType].map((t) => t.toLowerCase())).includes(normalize(columnDataType));
+}
+/**
+* Build the migration plan that `auth migrate` executes and `auth generate`
+* prints for the Kysely adapter.
+*
+* Adding a required column without a default to a populated table is refused:
+* existing rows have no value to backfill. `throwOnUnsafe` picks how that
+* refusal is delivered: executing callers get an {@link UnsafeMigrationError},
+* read-only callers get the plan plus the same message in `unsafeChanges`.
+*
+* @throws {UnsafeMigrationError} when a required column cannot be migrated
+* safely and `throwOnUnsafe` is left on.
+* @throws {BetterAuthError} when an index definition conflicts with an
+* existing or already-planned index.
+*/
+async function getMigrations(config, { throwOnUnsafe = true } = {}) {
+	const betterAuthSchema = getSchema(config);
+	const authTables = getAuthTables(config);
+	const logger = createLogger(config.logger);
+	const unsafeChanges = [];
+	const reportUnsafeChange = (message) => {
+		if (throwOnUnsafe) throw new UnsafeMigrationError(message);
+		unsafeChanges.push(message);
+	};
+	let { kysely: db, databaseType: dbType, introspectIndexes, schemaName } = await createKyselyAdapter(config);
+	if (!dbType) {
+		logger.warn("Could not determine database type, defaulting to sqlite. Please provide a type in the database options to avoid this.");
+		dbType = "sqlite";
+	}
+	if (!db) {
+		logger.error("Only kysely adapter is supported for migrations. You can use `generate` command to generate the schema, if you're using a different adapter.");
+		process.exit(1);
+	}
+	const allTableMetadata = await db.introspection.getTables();
+	let target;
+	let tableMetadata = allTableMetadata;
+	switch (dbType) {
+		case "postgres": {
+			const schema = schemaName ?? await getPostgresSchema(db);
+			target = {
+				type: "postgres",
+				schema
+			};
+			logger.debug(`PostgreSQL migration: Using schema '${schema}' (${schemaName ? "from database.schemaName" : "from search_path"})`);
+			try {
+				if (!(await db.introspection.getSchemas()).some(({ name }) => name === schema)) if (schemaName) logger.debug(`Schema '${schema}' does not exist yet. The migration creates it before creating tables.`);
+				else logger.warn(`Schema '${schema}' does not exist. Create it before running migrations or check your database configuration.`);
+			} catch (error) {
+				logger.debug(`Could not verify schema existence: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			/**
+			* Kysely 0.28 does not expose `isForeign`, while 0.29 adds foreign table metadata.
+			* @see https://github.com/kysely-org/kysely/pull/1494
+			*/
+			tableMetadata = allTableMetadata.filter((table) => table.schema === schema && !table.isView && !("isForeign" in table && table.isForeign));
+			logger.debug(`Found ${tableMetadata.length} table(s) in schema '${schema}': ${tableMetadata.map((table) => table.name).join(", ") || "(none)"}`);
+			break;
+		}
+		case "mssql": {
+			const schema = await getMssqlSchema(db);
+			target = {
+				type: "mssql",
+				schema
+			};
+			logger.debug(`SQL Server migration: Using schema '${schema}' (from the current user's default schema)`);
+			tableMetadata = allTableMetadata.filter((table) => table.schema === schema);
+			break;
+		}
+		case "mysql":
+			target = { type: "mysql" };
+			break;
+		case "sqlite":
+			target = { type: "sqlite" };
+			break;
+	}
+	const databaseIndexMap = await getDatabaseIndexMap(db, target, allTableMetadata.map((table) => table.name), introspectIndexes);
+	const databaseColumnBounds = await getDatabaseColumnBounds(db, target);
+	const schemaProblems = diffSchema(toPhysicalSchema(db, betterAuthSchema), toIntrospectedTables(tableMetadata)).filter((finding) => finding.kind === "unexpected-required-column").map((finding) => formatSchemaFinding(finding, "database"));
+	const toBeCreated = [];
+	const toBeAdded = [];
+	const toBeAddedIndexes = [];
+	const plannedIndexes = /* @__PURE__ */ new Map();
+	for (const [key, value] of Object.entries(betterAuthSchema)) {
+		if (value.disableMigrations) continue;
+		const table = tableMetadata.find((table) => table.name === key);
+		for (const index of value.indexes ?? []) {
+			const name = index.name;
+			const indexKey = createDatabaseIndexKey(key, name);
+			const existingIndex = databaseIndexMap.get(indexKey);
+			if (existingIndex) {
+				if (!databaseIndexMatches(existingIndex, index)) throw new BetterAuthError(`Database index "${name}" on table "${key}" does not match the configured fields and uniqueness. Rename or replace the existing index, then run the migration again.`);
+				continue;
+			}
+			if (dbType === "sqlite" || dbType === "postgres") {
+				const indexOnAnotherTable = [...databaseIndexMap.values()].find((databaseIndex) => getPortableDatabaseIdentifierKey(databaseIndex.name) === getPortableDatabaseIdentifierKey(name) && getPortableDatabaseIdentifierKey(databaseIndex.table) !== getPortableDatabaseIdentifierKey(key));
+				if (indexOnAnotherTable) throw new BetterAuthError(`Database index name "${name}" is already used by table "${indexOnAnotherTable.table}". Index names must be unique across the schema.`);
+			}
+			const plannedIndex = plannedIndexes.get(indexKey);
+			if (plannedIndex) {
+				if (!databaseIndexMatches({
+					columns: plannedIndex.columns,
+					name: plannedIndex.name,
+					table: key,
+					unique: plannedIndex.unique ?? false,
+					validFullColumns: true
+				}, index)) throw new BetterAuthError(`Database index name "${name}" identifies more than one index on table "${key}".`);
+				continue;
+			}
+			if (table && (dbType === "mysql" || dbType === "mssql")) assertExistingTableIndexFits({
+				columnBounds: databaseColumnBounds,
+				dbType,
+				existingColumns: new Set(table.columns.map((column) => column.name)),
+				fields: value.fields,
+				index,
+				indexes: value.indexes ?? [],
+				table: key
+			});
+			plannedIndexes.set(indexKey, index);
+			toBeAddedIndexes.push({
+				table: key,
+				index,
+				name
+			});
+		}
+		if (!table) {
+			const tIndex = toBeCreated.findIndex((t) => t.table === key);
+			const tableData = {
+				table: key,
+				fields: value.fields,
+				order: value.order || Infinity
+			};
+			const insertIndex = toBeCreated.findIndex((t) => (t.order || Infinity) > tableData.order);
+			if (insertIndex === -1) if (tIndex === -1) toBeCreated.push(tableData);
+			else toBeCreated[tIndex].fields = {
+				...toBeCreated[tIndex].fields,
+				...value.fields
+			};
+			else toBeCreated.splice(insertIndex, 0, tableData);
+			continue;
+		}
+		const toBeAddedFields = {};
+		for (const [fieldName, field] of Object.entries(value.fields)) {
+			const column = table.columns.find((c) => c.name === fieldName);
+			if (!column) {
+				toBeAddedFields[fieldName] = field;
+				continue;
+			}
+			if (field.required !== false && column.isNullable) logger.warn(`Column "${fieldName}" on table "${key}" stays nullable while the schema declares the field required, so existing rows can still hold null. Backfill every row for this column and enforce NOT NULL to remove the drift.`);
+			if (matchType(column.dataType, field.type, dbType)) continue;
+			else logger.warn(`Field ${fieldName} in table ${key} has a different type in the database. Expected ${field.type} but got ${column.dataType}.`);
+		}
+		if (Object.keys(toBeAddedFields).length > 0) toBeAdded.push({
+			table: key,
+			fields: toBeAddedFields,
+			order: value.order || Infinity
+		});
+	}
+	const migrations = [];
+	if (schemaName && toBeCreated.length > 0) migrations.push(db.schema.createSchema(schemaName).ifNotExists());
+	const useUUIDs = config.advanced?.database?.generateId === "uuid";
+	const useNumberId = config.advanced?.database?.generateId === "serial";
+	function getType(field, fieldName, tableIndexStringLength) {
+		const type = field.type;
+		const provider = dbType || "sqlite";
+		const typeMap = {
+			string: {
+				sqlite: "text",
+				postgres: "text",
+				mysql: tableIndexStringLength ? `varchar(${tableIndexStringLength})` : field.unique ? "varchar(255)" : field.references ? "varchar(36)" : field.sortable ? "varchar(255)" : field.index ? "varchar(255)" : "text",
+				mssql: tableIndexStringLength ? `varchar(${tableIndexStringLength})` : field.unique || field.sortable ? "varchar(255)" : field.references ? "varchar(36)" : "varchar(8000)"
+			},
+			boolean: {
+				sqlite: "integer",
+				postgres: "boolean",
+				mysql: "boolean",
+				mssql: "smallint"
+			},
+			number: {
+				sqlite: field.bigint ? "bigint" : "integer",
+				postgres: field.bigint ? "bigint" : "integer",
+				mysql: field.bigint ? "bigint" : "integer",
+				mssql: field.bigint ? "bigint" : "integer"
+			},
+			date: {
+				sqlite: "date",
+				postgres: "timestamptz",
+				mysql: "timestamp(3)",
+				mssql: sql`datetime2(3)`
+			},
+			json: {
+				sqlite: "text",
+				postgres: "jsonb",
+				mysql: "json",
+				mssql: "varchar(8000)"
+			},
+			id: {
+				postgres: useNumberId ? sql`integer GENERATED BY DEFAULT AS IDENTITY` : useUUIDs ? "uuid" : "text",
+				mysql: useNumberId ? "integer" : useUUIDs ? "varchar(36)" : "varchar(36)",
+				mssql: useNumberId ? "integer" : useUUIDs ? "varchar(36)" : "varchar(36)",
+				sqlite: useNumberId ? "integer" : "text"
+			},
+			foreignKeyId: {
+				postgres: useNumberId ? "integer" : useUUIDs ? "uuid" : "text",
+				mysql: useNumberId ? "integer" : useUUIDs ? "varchar(36)" : "varchar(36)",
+				mssql: useNumberId ? "integer" : useUUIDs ? "varchar(36)" : "varchar(36)",
+				sqlite: useNumberId ? "integer" : "text"
+			},
+			"string[]": {
+				sqlite: "text",
+				postgres: "jsonb",
+				mysql: "json",
+				mssql: "varchar(8000)"
+			},
+			"number[]": {
+				sqlite: "text",
+				postgres: "jsonb",
+				mysql: "json",
+				mssql: "varchar(8000)"
+			}
+		};
+		if (fieldName === "id" || field.references?.field === "id") {
+			if (fieldName === "id") return typeMap.id[provider];
+			return typeMap.foreignKeyId[provider];
+		}
+		if (Array.isArray(type)) return "text";
+		if (!(type in typeMap)) throw new Error(`Unsupported field type '${String(type)}' for field '${fieldName}'. Allowed types are: string, number, boolean, date, string[], number[]. If you need to store structured data, store it as a JSON string (type: "string") or split it into primitive fields. See https://better-auth.com/docs/advanced/schema#additional-fields`);
+		return typeMap[type][provider];
+	}
+	const getModelName = initGetModelName({
+		schema: authTables,
+		usePlural: false
+	});
+	const getFieldName = initGetFieldName({
+		schema: authTables,
+		usePlural: false
+	});
+	function getReferencePath(model, field) {
+		try {
+			return `${getModelName(model)}.${getFieldName({
+				model,
+				field
+			})}`;
+		} catch {
+			return `${model}.${field}`;
+		}
+	}
+	const deferredIndexes = [];
+	const getTableIndexStringLength = (tableName, fieldName) => {
+		if (dbType !== "mysql" && dbType !== "mssql") return void 0;
+		const table = betterAuthSchema[tableName];
+		if (!table) return void 0;
+		return getDatabaseIndexStringLength({
+			columnName: fieldName,
+			dialect: dbType,
+			fields: table.fields,
+			indexes: table.indexes ?? []
+		});
+	};
+	if (toBeAdded.length) {
+		const populatedTables = /* @__PURE__ */ new Map();
+		for (const table of toBeAdded) for (const [fieldName, field] of Object.entries(table.fields)) {
+			const timestampDefault = hasTimestampColumnDefault(field, dbType);
+			const staticDefault = hasStaticColumnDefault(field);
+			if (field.required !== false && !timestampDefault && !staticDefault) {
+				let populated = populatedTables.get(table.table);
+				if (populated === void 0) {
+					populated = await tableHasRows(db, dbType, table.table);
+					populatedTables.set(table.table, populated);
+				}
+				if (populated) {
+					const textDetail = field.type === "string" ? " For a text column, every existing row ends up with the same empty string." : "";
+					reportUnsafeChange(`Cannot add required column "${fieldName}" to populated table "${table.table}": the schema declares no default value, so existing rows have no value to backfill. MySQL accepts this statement instead of rejecting it and fills every existing row with an implicit default for the column type, reporting a successful migration over corrupted data.${textDetail} Add the column as nullable, backfill a correct value for every row, then make it NOT NULL.`);
+				}
+			}
+			const type = getType(field, fieldName, getTableIndexStringLength(table.table, fieldName));
+			const builder = db.schema.alterTable(table.table);
+			if (field.index || field.unique) {
+				const indexName = getDatabaseFieldIndexName(table.table, fieldName, field.unique ?? false);
+				let indexBuilder = db.schema.createIndex(indexName).on(table.table).columns([fieldName]);
+				if (field.unique) {
+					indexBuilder = indexBuilder.unique();
+					if (field.required === false && dbType === "mssql") indexBuilder = indexBuilder.where(fieldName, "is not", null);
+					if (field.required !== false && field.defaultValue !== void 0 && field.defaultValue !== null && typeof field.defaultValue !== "function") logger.warn(`Adding unique column "${fieldName}" to existing table "${table.table}" backfills every existing row with its default value. If the table has more than one row, creating the unique index "${indexName}" will fail; backfill distinct values manually, then re-run the migration or create the index yourself.`);
+				}
+				deferredIndexes.push(indexBuilder);
+			}
+			const built = builder.addColumn(fieldName, type, (col) => {
+				col = field.required !== false ? col.notNull() : col;
+				if (field.references) col = col.references(getReferencePath(field.references.model, field.references.field)).onDelete(field.references.onDelete || "cascade");
+				if (timestampDefault) if (dbType === "mysql") col = col.defaultTo(sql`CURRENT_TIMESTAMP(3)`);
+				else col = col.defaultTo(sql`CURRENT_TIMESTAMP`);
+				else if (staticDefault) col = col.defaultTo(typeof field.defaultValue === "boolean" && (dbType === "sqlite" || dbType === "mssql") ? field.defaultValue ? 1 : 0 : field.defaultValue);
+				return col;
+			});
+			migrations.push(built);
+		}
+	}
+	if (toBeCreated.length) for (const table of toBeCreated) {
+		const idType = getType({ type: useNumberId ? "number" : "string" }, "id");
+		let dbT = db.schema.createTable(table.table).addColumn("id", idType, (col) => {
+			if (useNumberId) {
+				if (dbType === "postgres") return col.primaryKey().notNull();
+				else if (dbType === "sqlite") return col.primaryKey().notNull();
+				else if (dbType === "mssql") return col.identity().primaryKey().notNull();
+				return col.autoIncrement().primaryKey().notNull();
+			}
+			if (useUUIDs) {
+				if (dbType === "postgres") return col.primaryKey().defaultTo(sql`pg_catalog.gen_random_uuid()`).notNull();
+				return col.primaryKey().notNull();
+			}
+			return col.primaryKey().notNull();
+		});
+		for (const [fieldName, field] of Object.entries(table.fields)) {
+			const type = getType(field, fieldName, getTableIndexStringLength(table.table, fieldName));
+			dbT = dbT.addColumn(fieldName, type, (col) => {
+				col = field.required !== false ? col.notNull() : col;
+				if (field.references) col = col.references(getReferencePath(field.references.model, field.references.field)).onDelete(field.references.onDelete || "cascade");
+				if (field.unique) col = col.unique();
+				if (field.type === "date" && typeof field.defaultValue === "function" && (dbType === "postgres" || dbType === "mysql" || dbType === "mssql")) if (dbType === "mysql") col = col.defaultTo(sql`CURRENT_TIMESTAMP(3)`);
+				else col = col.defaultTo(sql`CURRENT_TIMESTAMP`);
+				return col;
+			});
+			if (field.index && !field.unique) {
+				const builder = db.schema.createIndex(getDatabaseFieldIndexName(table.table, fieldName, false)).on(table.table).columns([fieldName]);
+				deferredIndexes.push(builder);
+			}
+		}
+		migrations.push(dbT);
+	}
+	for (const { table, index, name } of toBeAddedIndexes) {
+		let builder = db.schema.createIndex(name).on(table).columns([...index.columns]);
+		if (index.unique) builder = builder.unique();
+		deferredIndexes.push(builder);
+	}
+	for (const index of deferredIndexes) migrations.push(index);
+	async function runMigrations() {
+		try {
+			for (const migration of migrations) await migration.execute();
+		} finally {
+			if (migrations.length && config.database) invalidateSchemaChecks(config.database);
+		}
+	}
+	async function compileMigrations() {
+		return migrations.map((m) => m.compile().sql).join(";\n\n") + ";";
+	}
+	return {
+		toBeCreated,
+		toBeAdded,
+		toBeAddedIndexes,
+		unsafeChanges,
+		schemaProblems,
+		runMigrations,
+		compileMigrations
+	};
+}
+//#endregion
+export { UnsafeMigrationError, getMigrations, matchType };
