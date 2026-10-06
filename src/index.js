@@ -7,6 +7,7 @@ import { createAuth } from "./lib/auth.js";
 
 import artworksRoutes from "./routes/artworksRoutes.js";
 import purchasesRoutes from "./routes/purchasesRoutes.js";
+import favoritesRoutes from "./routes/favoritesRoutes.js";
 
 const app = express();
 
@@ -56,7 +57,10 @@ async function startServer() {
     // 8. Purchase / Stripe routes
     app.use("/purchases", purchasesRoutes);
 
-    // 9. 404 route
+    // 9. Favorites routes
+    app.use("/favorites", favoritesRoutes);
+
+    // 10. 404 route
     app.use((req, res) => {
       res.status(404).json({
         success: false,
@@ -64,7 +68,7 @@ async function startServer() {
       });
     });
 
-    // 10. Start server
+    // 11. Start server
     app.listen(port, () => {
       console.log(
         `ArtHub server is running on port ${port}`
@@ -80,6 +84,10 @@ async function startServer() {
 
       console.log(
         `Purchase API is available at http://localhost:${port}/purchases`
+      );
+
+      console.log(
+        `Favorites API is available at http://localhost:${port}/favorites`
       );
     });
   } catch (error) {
