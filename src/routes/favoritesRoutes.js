@@ -4,166 +4,215 @@ import { ObjectId } from "mongodb";
 import { getFavoritesCollection } from "../collections/favoritesCollection.js";
 import { getArtworksCollection } from "../collections/artworksCollection.js";
 
+import {
+  requireAuth,
+  requireRole,
+} from "../middleware/authMiddleware.js";
+
 const router = express.Router();
 
 /**
  * GET USER FAVORITES
- * GET /favorites/:email
+ * Collector only
  */
-router.get("/:email", async (req, res) => {
-  try {
-    const { email } = req.params;
+router.get(
+  "/:email",
+  requireAuth,
+  requireRole("user"),
+  async (req, res) => {
+    try {
+      const sessionEmail =
+        req.auth.user.email
+          .trim()
+          .toLowerCase();
 
-    if (!email) {
-      return res.status(400).json({
+      const requestedEmail =
+        req.params.email
+          .trim()
+          .toLowerCase();
+
+      if (sessionEmail !== requestedEmail) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "You can only access your own favorites.",
+        });
+      }
+
+      const favoritesCollection =
+        getFavoritesCollection();
+
+      const favorites =
+        await favoritesCollection
+          .find({
+            userEmail: sessionEmail,
+          })
+          .sort({
+            createdAt: -1,
+          })
+          .toArray();
+
+      return res.status(200).json({
+        success: true,
+        count: favorites.length,
+        data: favorites,
+      });
+    } catch (error) {
+      console.error(
+        "Get favorites error:",
+        error
+      );
+
+      return res.status(500).json({
         success: false,
-        message: "User email is required.",
+        message:
+          "Failed to load favorites.",
       });
     }
-
-    const favoritesCollection =
-      getFavoritesCollection();
-
-    const favorites = await favoritesCollection
-      .find({
-        userEmail: email.toLowerCase(),
-      })
-      .sort({
-        createdAt: -1,
-      })
-      .toArray();
-
-    return res.status(200).json({
-      success: true,
-      count: favorites.length,
-      data: favorites,
-    });
-  } catch (error) {
-    console.error(
-      "Get favorites error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to load favorites.",
-    });
   }
-});
+);
 
 /**
  * ADD FAVORITE
- * POST /favorites
+ * Collector only
  */
-router.post("/", async (req, res) => {
-  try {
-    const {
-      artworkId,
-      userName,
-      userEmail,
-    } = req.body;
+router.post(
+  "/",
+  requireAuth,
+  requireRole("user"),
+  async (req, res) => {
+    try {
+      const user = req.auth.user;
 
-    if (!artworkId || !userEmail) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Artwork ID and user email are required.",
-      });
-    }
+      const { artworkId } = req.body;
 
-    if (!ObjectId.isValid(artworkId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid artwork ID.",
-      });
-    }
+      if (!artworkId) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Artwork ID is required.",
+        });
+      }
 
-    const artworksCollection =
-      getArtworksCollection();
+      if (!ObjectId.isValid(artworkId)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid artwork ID.",
+        });
+      }
 
-    const favoritesCollection =
-      getFavoritesCollection();
+      const artworksCollection =
+        getArtworksCollection();
 
-    const artwork =
-      await artworksCollection.findOne({
-        _id: new ObjectId(artworkId),
-      });
+      const favoritesCollection =
+        getFavoritesCollection();
 
-    if (!artwork) {
-      return res.status(404).json({
-        success: false,
-        message: "Artwork not found.",
-      });
-    }
+      const artwork =
+        await artworksCollection.findOne({
+          _id: new ObjectId(artworkId),
+        });
 
-    const normalizedEmail =
-      userEmail.toLowerCase();
+      if (!artwork) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Artwork not found.",
+        });
+      }
 
-    const existingFavorite =
-      await favoritesCollection.findOne({
+      const normalizedEmail =
+        user.email
+          .trim()
+          .toLowerCase();
+
+      const existingFavorite =
+        await favoritesCollection.findOne({
+          artworkId,
+          userEmail: normalizedEmail,
+        });
+
+      if (existingFavorite) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Artwork is already in favorites.",
+        });
+      }
+
+      const favorite = {
         artworkId,
-        userEmail: normalizedEmail,
-      });
 
-    if (existingFavorite) {
-      return res.status(409).json({
-        success: false,
+        userName:
+          user.name || "",
+
+        userEmail:
+          normalizedEmail,
+
+        title:
+          artwork.title,
+
+        image:
+          artwork.image,
+
+        category:
+          artwork.category,
+
+        price:
+          artwork.price,
+
+        artistName:
+          artwork.artistName,
+
+        artistEmail:
+          artwork.artistEmail,
+
+        sold:
+          artwork.sold === true,
+
+        createdAt:
+          new Date(),
+      };
+
+      const result =
+        await favoritesCollection.insertOne(
+          favorite
+        );
+
+      return res.status(201).json({
+        success: true,
+
         message:
-          "Artwork is already in favorites.",
+          "Artwork added to favorites.",
+
+        data: {
+          ...favorite,
+          _id: result.insertedId,
+        },
       });
-    }
-
-    const favorite = {
-      artworkId,
-      userName: userName || "",
-      userEmail: normalizedEmail,
-
-      title: artwork.title,
-      image: artwork.image,
-      category: artwork.category,
-      price: artwork.price,
-
-      artistName: artwork.artistName,
-      artistEmail: artwork.artistEmail,
-
-      sold: artwork.sold === true,
-
-      createdAt: new Date(),
-    };
-
-    const result =
-      await favoritesCollection.insertOne(
-        favorite
+    } catch (error) {
+      console.error(
+        "Add favorite error:",
+        error
       );
 
-    return res.status(201).json({
-      success: true,
-      message: "Artwork added to favorites.",
-      data: {
-        ...favorite,
-        _id: result.insertedId,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Add favorite error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        "Failed to add artwork to favorites.",
-    });
+      return res.status(500).json({
+        success: false,
+        message:
+          "Failed to add artwork to favorites.",
+      });
+    }
   }
-});
+);
 
 /**
  * REMOVE FAVORITE
- * DELETE /favorites/:artworkId/:email
+ * Collector only
  */
 router.delete(
   "/:artworkId/:email",
+  requireAuth,
+  requireRole("user"),
   async (req, res) => {
     try {
       const {
@@ -171,11 +220,21 @@ router.delete(
         email,
       } = req.params;
 
-      if (!artworkId || !email) {
-        return res.status(400).json({
+      const sessionEmail =
+        req.auth.user.email
+          .trim()
+          .toLowerCase();
+
+      const requestedEmail =
+        email
+          .trim()
+          .toLowerCase();
+
+      if (sessionEmail !== requestedEmail) {
+        return res.status(403).json({
           success: false,
           message:
-            "Artwork ID and email are required.",
+            "You can only modify your own favorites.",
         });
       }
 
@@ -185,8 +244,7 @@ router.delete(
       const result =
         await favoritesCollection.deleteOne({
           artworkId,
-          userEmail:
-            email.toLowerCase(),
+          userEmail: sessionEmail,
         });
 
       if (result.deletedCount === 0) {
