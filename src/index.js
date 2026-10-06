@@ -4,57 +4,89 @@ import { toNodeHandler } from "better-auth/node";
 
 import { connectToDatabase } from "./config/db.js";
 import { createAuth } from "./lib/auth.js";
+
 import artworksRoutes from "./routes/artworksRoutes.js";
+import purchasesRoutes from "./routes/purchasesRoutes.js";
 
 const app = express();
 
 const port = process.env.PORT || 5000;
-const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
 
-app.use(
-  cors({
-    origin: clientUrl,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-app.get("/", (req, res) => {
-  res.json({
-    success: true,
-    message: "ArtHub server is running.",
-  });
-});
+const clientUrl =
+  process.env.CLIENT_URL || "http://localhost:3000";
 
 async function startServer() {
   try {
-    // 1. Connect MongoDB first
+    // 1. First connect MongoDB
     await connectToDatabase();
 
-    // 2. Create Better Auth after DB connection
+    // 2. Then create Better Auth
+    // createAuth() uses the connected MongoDB database
     const auth = createAuth();
 
-    // 3. Better Auth routes
-    // Important: Keep this before express.json()
-    app.all("/api/auth/*splat", toNodeHandler(auth));
+    // 3. CORS
+    app.use(
+      cors({
+        origin: clientUrl,
+        credentials: true,
+      })
+    );
 
-    // 4. JSON parser for our normal API routes
+    // 4. Better Auth routes
+    // Keep this before express.json()
+    app.all(
+      "/api/auth/*splat",
+      toNodeHandler(auth)
+    );
+
+    // 5. JSON middleware
     app.use(express.json());
 
-    // 5. Artwork API
+    // 6. Health / root route
+    app.get("/", (req, res) => {
+      res.status(200).json({
+        success: true,
+        message: "ArtHub server is running.",
+      });
+    });
+
+    // 7. Artwork routes
     app.use("/artworks", artworksRoutes);
 
-    // 6. Start server
+    // 8. Purchase / Stripe routes
+    app.use("/purchases", purchasesRoutes);
+
+    // 9. 404 route
+    app.use((req, res) => {
+      res.status(404).json({
+        success: false,
+        message: "Route not found.",
+      });
+    });
+
+    // 10. Start server
     app.listen(port, () => {
-      console.log(`ArtHub server is running on port ${port}`);
+      console.log(
+        `ArtHub server is running on port ${port}`
+      );
+
       console.log(
         `Better Auth API is available at http://localhost:${port}/api/auth`
       );
+
+      console.log(
+        `Artwork API is available at http://localhost:${port}/artworks`
+      );
+
+      console.log(
+        `Purchase API is available at http://localhost:${port}/purchases`
+      );
     });
   } catch (error) {
-    console.error("Failed to start ArtHub server:");
-    console.error(error.message);
+    console.error(
+      "Failed to start ArtHub server:",
+      error
+    );
 
     process.exit(1);
   }

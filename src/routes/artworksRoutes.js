@@ -6,36 +6,42 @@ import { getArtworksCollection } from "../collections/artworksCollection.js";
 const router = express.Router();
 
 /**
+ * GET ALL ARTWORKS
  * GET /artworks
- * Get all artworks
  */
 router.get("/", async (req, res) => {
   try {
-    const artworksCollection = getArtworksCollection();
+    const artworksCollection =
+      getArtworksCollection();
 
     const artworks = await artworksCollection
       .find()
-      .sort({ createdAt: -1 })
+      .sort({
+        createdAt: -1,
+      })
       .toArray();
 
-    res.json({
+    return res.status(200).json({
       success: true,
       count: artworks.length,
       data: artworks,
     });
   } catch (error) {
-    console.error("Failed to fetch artworks:", error);
+    console.error(
+      "Get all artworks error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to fetch artworks.",
+      message: "Failed to load artworks.",
     });
   }
 });
 
 /**
+ * GET SINGLE ARTWORK
  * GET /artworks/:id
- * Get a single artwork
  */
 router.get("/:id", async (req, res) => {
   try {
@@ -48,11 +54,13 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    const artworksCollection = getArtworksCollection();
+    const artworksCollection =
+      getArtworksCollection();
 
-    const artwork = await artworksCollection.findOne({
-      _id: new ObjectId(id),
-    });
+    const artwork =
+      await artworksCollection.findOne({
+        _id: new ObjectId(id),
+      });
 
     if (!artwork) {
       return res.status(404).json({
@@ -61,23 +69,26 @@ router.get("/:id", async (req, res) => {
       });
     }
 
-    res.json({
+    return res.status(200).json({
       success: true,
       data: artwork,
     });
   } catch (error) {
-    console.error("Failed to fetch artwork:", error);
+    console.error(
+      "Get single artwork error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to fetch artwork.",
+      message: "Failed to load artwork.",
     });
   }
 });
 
 /**
+ * CREATE ARTWORK
  * POST /artworks
- * Create a new artwork
  */
 router.post("/", async (req, res) => {
   try {
@@ -97,61 +108,82 @@ router.post("/", async (req, res) => {
       !artistEmail ||
       !description ||
       price === undefined ||
+      price === null ||
+      price === "" ||
       !category ||
       !image
     ) {
       return res.status(400).json({
         success: false,
-        message: "All artwork fields are required.",
+        message:
+          "All artwork fields are required.",
       });
     }
 
     const numericPrice = Number(price);
 
-    if (Number.isNaN(numericPrice) || numericPrice < 0) {
+    if (
+      !Number.isFinite(numericPrice) ||
+      numericPrice <= 0
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Price must be a valid non-negative number.",
+        message:
+          "Artwork price must be greater than 0.",
       });
     }
 
+    const artworksCollection =
+      getArtworksCollection();
+
     const artwork = {
-      title,
-      artistName,
-      artistEmail,
-      description,
+      title: title.trim(),
+      artistName: artistName.trim(),
+      artistEmail: artistEmail
+        .trim()
+        .toLowerCase(),
+      description: description.trim(),
       price: numericPrice,
-      category,
-      image,
+      category: category.trim(),
+      image: image.trim(),
+
+      sold: false,
+
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
-    const artworksCollection = getArtworksCollection();
+    const result =
+      await artworksCollection.insertOne(
+        artwork
+      );
 
-    const result = await artworksCollection.insertOne(artwork);
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: "Artwork created successfully.",
+      message:
+        "Artwork created successfully.",
       data: {
-        _id: result.insertedId,
         ...artwork,
+        _id: result.insertedId,
       },
     });
   } catch (error) {
-    console.error("Failed to create artwork:", error);
+    console.error(
+      "Create artwork error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to create artwork.",
+      message:
+        "Failed to create artwork.",
     });
   }
 });
 
 /**
+ * UPDATE ARTWORK
  * PUT /artworks/:id
- * Update an existing artwork
  */
 router.put("/:id", async (req, res) => {
   try {
@@ -161,6 +193,30 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Invalid artwork id.",
+      });
+    }
+
+    const artworksCollection =
+      getArtworksCollection();
+
+    const existingArtwork =
+      await artworksCollection.findOne({
+        _id: new ObjectId(id),
+      });
+
+    if (!existingArtwork) {
+      return res.status(404).json({
+        success: false,
+        message: "Artwork not found.",
+      });
+    }
+
+    // Protect sold artwork
+    if (existingArtwork.sold === true) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Sold artworks cannot be updated.",
       });
     }
 
@@ -180,75 +236,80 @@ router.put("/:id", async (req, res) => {
       !artistEmail ||
       !description ||
       price === undefined ||
+      price === null ||
+      price === "" ||
       !category ||
       !image
     ) {
       return res.status(400).json({
         success: false,
-        message: "All artwork fields are required.",
+        message:
+          "All artwork fields are required.",
       });
     }
 
     const numericPrice = Number(price);
 
-    if (Number.isNaN(numericPrice) || numericPrice < 0) {
+    if (
+      !Number.isFinite(numericPrice) ||
+      numericPrice <= 0
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Price must be a valid non-negative number.",
+        message:
+          "Artwork price must be greater than 0.",
       });
     }
 
     const updatedArtwork = {
-      title,
-      artistName,
-      artistEmail,
-      description,
+      title: title.trim(),
+      artistName: artistName.trim(),
+      artistEmail: artistEmail
+        .trim()
+        .toLowerCase(),
+      description: description.trim(),
       price: numericPrice,
-      category,
-      image,
+      category: category.trim(),
+      image: image.trim(),
       updatedAt: new Date(),
     };
 
-    const artworksCollection = getArtworksCollection();
+    const result =
+      await artworksCollection.findOneAndUpdate(
+        {
+          _id: new ObjectId(id),
+        },
+        {
+          $set: updatedArtwork,
+        },
+        {
+          returnDocument: "after",
+        }
+      );
 
-    const result = await artworksCollection.updateOne(
-      {
-        _id: new ObjectId(id),
-      },
-      {
-        $set: updatedArtwork,
-      }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Artwork not found.",
-      });
-    }
-
-    const artwork = await artworksCollection.findOne({
-      _id: new ObjectId(id),
-    });
-
-    res.json({
+    return res.status(200).json({
       success: true,
-      message: "Artwork updated successfully.",
-      data: artwork,
+      message:
+        "Artwork updated successfully.",
+      data: result,
     });
   } catch (error) {
-    console.error("Failed to update artwork:", error);
+    console.error(
+      "Update artwork error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to update artwork.",
+      message:
+        "Failed to update artwork.",
     });
   }
 });
 
 /**
+ * DELETE ARTWORK
  * DELETE /artworks/:id
- * Delete an artwork
  */
 router.delete("/:id", async (req, res) => {
   try {
@@ -261,11 +322,34 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    const artworksCollection = getArtworksCollection();
+    const artworksCollection =
+      getArtworksCollection();
 
-    const result = await artworksCollection.deleteOne({
-      _id: new ObjectId(id),
-    });
+    const existingArtwork =
+      await artworksCollection.findOne({
+        _id: new ObjectId(id),
+      });
+
+    if (!existingArtwork) {
+      return res.status(404).json({
+        success: false,
+        message: "Artwork not found.",
+      });
+    }
+
+    // Protect sold artwork
+    if (existingArtwork.sold === true) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Sold artworks cannot be deleted.",
+      });
+    }
+
+    const result =
+      await artworksCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({
@@ -274,16 +358,21 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    res.json({
+    return res.status(200).json({
       success: true,
-      message: "Artwork deleted successfully.",
+      message:
+        "Artwork deleted successfully.",
     });
   } catch (error) {
-    console.error("Failed to delete artwork:", error);
+    console.error(
+      "Delete artwork error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Failed to delete artwork.",
+      message:
+        "Failed to delete artwork.",
     });
   }
 });
