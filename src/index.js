@@ -14,6 +14,7 @@ import purchasesRoutes from "./routes/purchasesRoutes.js";
 import favoritesRoutes from "./routes/favoritesRoutes.js";
 import commentsRoutes from "./routes/commentsRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
+import subscriptionsRoutes from "./routes/subscriptionsRoutes.js";
 
 const app = express();
 
@@ -91,6 +92,11 @@ async function startServer() {
     );
 
     app.use(
+      "/subscriptions",
+      subscriptionsRoutes
+    );
+
+    app.use(
       "/admin",
       adminRoutes
     );
@@ -126,6 +132,10 @@ async function startServer() {
 
       console.log(
         "Comments API is ready"
+      );
+
+      console.log(
+        "Subscription API is ready"
       );
 
       console.log(
