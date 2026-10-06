@@ -6,30 +6,21 @@ import { getDatabase } from "../config/db.js";
 export function createAuth() {
   const db = getDatabase();
 
-  const clientUrl =
-    process.env.CLIENT_URL ||
-    "http://localhost:3000";
-
-  const authUrl =
-    process.env.BETTER_AUTH_URL ||
-    "http://localhost:5000";
-
-  const trustedOrigins = [
-    clientUrl,
-    authUrl,
-    "http://localhost:3000",
-    "http://localhost:5000",
-  ].filter(Boolean);
-
   return betterAuth({
     database: mongodbAdapter(db),
 
-    secret:
-      process.env.BETTER_AUTH_SECRET,
+    secret: process.env.BETTER_AUTH_SECRET,
 
-    baseURL: authUrl,
+    baseURL:
+      process.env.BETTER_AUTH_URL ||
+      "http://localhost:5000",
 
-    trustedOrigins,
+    trustedOrigins: [
+      process.env.CLIENT_URL ||
+        "http://localhost:3000",
+      "http://localhost:3000",
+      "http://localhost:5000",
+    ],
 
     emailAndPassword: {
       enabled: true,
@@ -48,9 +39,16 @@ export function createAuth() {
     user: {
       additionalFields: {
         role: {
-          type: ["user", "artist"],
+          type: [
+            "user",
+            "artist",
+            "admin",
+          ],
+
           required: false,
+
           defaultValue: "user",
+
           input: true,
         },
       },

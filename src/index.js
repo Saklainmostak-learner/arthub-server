@@ -13,6 +13,7 @@ import artworksRoutes from "./routes/artworksRoutes.js";
 import purchasesRoutes from "./routes/purchasesRoutes.js";
 import favoritesRoutes from "./routes/favoritesRoutes.js";
 import commentsRoutes from "./routes/commentsRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 const app = express();
 
@@ -42,6 +43,7 @@ async function startServer() {
           "GET",
           "POST",
           "PUT",
+          "PATCH",
           "DELETE",
           "OPTIONS",
         ],
@@ -88,6 +90,11 @@ async function startServer() {
       commentsRoutes
     );
 
+    app.use(
+      "/admin",
+      adminRoutes
+    );
+
     app.use((req, res) => {
       res.status(404).json({
         success: false,
@@ -119,6 +126,10 @@ async function startServer() {
 
       console.log(
         "Comments API is ready"
+      );
+
+      console.log(
+        "Admin API is ready"
       );
     });
   } catch (error) {
