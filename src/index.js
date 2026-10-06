@@ -12,6 +12,7 @@ import {
 import artworksRoutes from "./routes/artworksRoutes.js";
 import purchasesRoutes from "./routes/purchasesRoutes.js";
 import favoritesRoutes from "./routes/favoritesRoutes.js";
+import commentsRoutes from "./routes/commentsRoutes.js";
 
 const app = express();
 
@@ -82,6 +83,11 @@ async function startServer() {
       favoritesRoutes
     );
 
+    app.use(
+      "/comments",
+      commentsRoutes
+    );
+
     app.use((req, res) => {
       res.status(404).json({
         success: false,
@@ -96,19 +102,23 @@ async function startServer() {
       );
 
       console.log(
-        `Better Auth API is ready`
+        "Better Auth API is ready"
       );
 
       console.log(
-        `Artwork API is ready`
+        "Artwork API is ready"
       );
 
       console.log(
-        `Purchase API is ready`
+        "Purchase API is ready"
       );
 
       console.log(
-        `Favorites API is ready`
+        "Favorites API is ready"
+      );
+
+      console.log(
+        "Comments API is ready"
       );
     });
   } catch (error) {
