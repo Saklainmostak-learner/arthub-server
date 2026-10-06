@@ -10,13 +10,11 @@ import {
   requireRole,
 } from "../middleware/authMiddleware.js";
 
-const router =
-  express.Router();
+const router = express.Router();
 
-const stripe =
-  new Stripe(
-    process.env.STRIPE_SECRET_KEY
-  );
+const stripe = new Stripe(
+  process.env.STRIPE_SECRET_KEY
+);
 
 const clientUrl =
   process.env.CLIENT_URL ||
@@ -28,11 +26,8 @@ const clientUrl =
  */
 router.post(
   "/create-checkout-session",
-
   requireAuth,
-
   requireRole("user"),
-
   async (req, res) => {
     try {
       const user =
@@ -43,27 +38,19 @@ router.post(
       } = req.body;
 
       if (!artworkId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Artwork ID is required.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Artwork ID is required.",
+        });
       }
 
-      if (
-        !ObjectId.isValid(
-          artworkId
-        )
-      ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Invalid artwork ID.",
-          });
+      if (!ObjectId.isValid(artworkId)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid artwork ID.",
+        });
       }
 
       const artworksCollection =
@@ -81,25 +68,19 @@ router.post(
         });
 
       if (!artwork) {
-        return res
-          .status(404)
-          .json({
-            success: false,
-            message:
-              "Artwork not found.",
-          });
+        return res.status(404).json({
+          success: false,
+          message:
+            "Artwork not found.",
+        });
       }
 
-      if (
-        artwork.sold === true
-      ) {
-        return res
-          .status(409)
-          .json({
-            success: false,
-            message:
-              "This artwork has already been sold.",
-          });
+      if (artwork.sold === true) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "This artwork has already been sold.",
+        });
       }
 
       const buyerEmail =
@@ -116,13 +97,11 @@ router.post(
         artistEmail ===
         buyerEmail
       ) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message:
-              "You cannot purchase your own artwork.",
-          });
+        return res.status(403).json({
+          success: false,
+          message:
+            "You cannot purchase your own artwork.",
+        });
       }
 
       const existingPurchase =
@@ -134,16 +113,12 @@ router.post(
             "paid",
         });
 
-      if (
-        existingPurchase
-      ) {
-        return res
-          .status(409)
-          .json({
-            success: false,
-            message:
-              "This artwork has already been sold.",
-          });
+      if (existingPurchase) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "This artwork has already been sold.",
+        });
       }
 
       const price =
@@ -152,24 +127,19 @@ router.post(
         );
 
       if (
-        !Number.isFinite(
-          price
-        ) ||
+        !Number.isFinite(price) ||
         price <= 0
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Artwork price is invalid.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Artwork price is invalid.",
+        });
       }
 
       const checkoutSession =
         await stripe.checkout.sessions.create({
-          mode:
-            "payment",
+          mode: "payment",
 
           customer_email:
             buyerEmail,
@@ -177,8 +147,7 @@ router.post(
           line_items: [
             {
               price_data: {
-                currency:
-                  "usd",
+                currency: "usd",
 
                 product_data: {
                   name:
@@ -203,20 +172,16 @@ router.post(
               artwork._id.toString(),
 
             artworkTitle:
-              artwork.title ||
-              "",
+              artwork.title || "",
 
             artistName:
-              artwork.artistName ||
-              "",
+              artwork.artistName || "",
 
             artistEmail:
-              artwork.artistEmail ||
-              "",
+              artwork.artistEmail || "",
 
             buyerName:
-              user.name ||
-              "",
+              user.name || "",
 
             buyerEmail,
           },
@@ -228,28 +193,24 @@ router.post(
             `${clientUrl}/artworks/${artwork._id}`,
         });
 
-      return res
-        .status(200)
-        .json({
-          success: true,
-          url:
-            checkoutSession.url,
-        });
+      return res.status(200).json({
+        success: true,
+        url:
+          checkoutSession.url,
+      });
     } catch (error) {
       console.error(
         "Create Stripe checkout error:",
         error
       );
 
-      return res
-        .status(500)
-        .json({
-          success: false,
+      return res.status(500).json({
+        success: false,
 
-          message:
-            error?.message ||
-            "Failed to create checkout session.",
-        });
+        message:
+          error?.message ||
+          "Failed to create checkout session.",
+      });
     }
   }
 );
@@ -260,11 +221,8 @@ router.post(
  */
 router.post(
   "/confirm-payment",
-
   requireAuth,
-
   requireRole("user"),
-
   async (req, res) => {
     try {
       const user =
@@ -275,13 +233,11 @@ router.post(
       } = req.body;
 
       if (!sessionId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Stripe session ID is required.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Stripe session ID is required.",
+        });
       }
 
       const stripeSession =
@@ -293,13 +249,11 @@ router.post(
         stripeSession.payment_status !==
         "paid"
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Payment has not been completed.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Payment has not been completed.",
+        });
       }
 
       const sessionBuyerEmail =
@@ -318,13 +272,11 @@ router.post(
         stripeBuyerEmail !==
           sessionBuyerEmail
       ) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message:
-              "This payment does not belong to the current user.",
-          });
+        return res.status(403).json({
+          success: false,
+          message:
+            "This payment does not belong to the current user.",
+        });
       }
 
       const purchasesCollection =
@@ -339,20 +291,14 @@ router.post(
             stripeSession.id,
         });
 
-      if (
-        existingSessionPurchase
-      ) {
-        return res
-          .status(200)
-          .json({
-            success: true,
-
-            message:
-              "Purchase already confirmed.",
-
-            data:
-              existingSessionPurchase,
-          });
+      if (existingSessionPurchase) {
+        return res.status(200).json({
+          success: true,
+          message:
+            "Purchase already confirmed.",
+          data:
+            existingSessionPurchase,
+        });
       }
 
       const artworkId =
@@ -365,13 +311,11 @@ router.post(
           artworkId
         )
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            message:
-              "Invalid artwork information.",
-          });
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid artwork information.",
+        });
       }
 
       const artwork =
@@ -383,13 +327,11 @@ router.post(
         });
 
       if (!artwork) {
-        return res
-          .status(404)
-          .json({
-            success: false,
-            message:
-              "Artwork could not be found.",
-          });
+        return res.status(404).json({
+          success: false,
+          message:
+            "Artwork could not be found.",
+        });
       }
 
       const existingArtworkPurchase =
@@ -402,13 +344,11 @@ router.post(
       if (
         existingArtworkPurchase
       ) {
-        return res
-          .status(409)
-          .json({
-            success: false,
-            message:
-              "This artwork has already been sold.",
-          });
+        return res.status(409).json({
+          success: false,
+          message:
+            "This artwork has already been sold.",
+        });
       }
 
       const purchase = {
@@ -427,14 +367,17 @@ router.post(
           "",
 
         artistEmail:
-          stripeSession.metadata
-            ?.artistEmail ||
-          artwork.artistEmail ||
-          "",
+          (
+            stripeSession.metadata
+              ?.artistEmail ||
+            artwork.artistEmail ||
+            ""
+          )
+            .trim()
+            .toLowerCase(),
 
         buyerName:
-          user.name ||
-          "",
+          user.name || "",
 
         buyerEmail:
           sessionBuyerEmail,
@@ -488,36 +431,31 @@ router.post(
         }
       );
 
-      return res
-        .status(201)
-        .json({
-          success: true,
+      return res.status(201).json({
+        success: true,
 
-          message:
-            "Purchase saved successfully.",
+        message:
+          "Purchase saved successfully.",
 
-          data: {
-            ...purchase,
-
-            _id:
-              result.insertedId,
-          },
-        });
+        data: {
+          ...purchase,
+          _id:
+            result.insertedId,
+        },
+      });
     } catch (error) {
       console.error(
         "Confirm Stripe payment error:",
         error
       );
 
-      return res
-        .status(500)
-        .json({
-          success: false,
+      return res.status(500).json({
+        success: false,
 
-          message:
-            error?.message ||
-            "Failed to confirm payment.",
-        });
+        message:
+          error?.message ||
+          "Failed to confirm payment.",
+      });
     }
   }
 );
@@ -528,11 +466,8 @@ router.post(
  */
 router.get(
   "/buyer/:email",
-
   requireAuth,
-
   requireRole("user"),
-
   async (req, res) => {
     try {
       const sessionEmail =
@@ -549,13 +484,11 @@ router.get(
         sessionEmail !==
         requestedEmail
       ) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            message:
-              "You can only view your own purchases.",
-          });
+        return res.status(403).json({
+          success: false,
+          message:
+            "You can only view your own purchases.",
+        });
       }
 
       const purchasesCollection =
@@ -575,32 +508,111 @@ router.get(
           })
           .toArray();
 
-      return res
-        .status(200)
-        .json({
-          success: true,
+      return res.status(200).json({
+        success: true,
 
-          count:
-            purchases.length,
+        count:
+          purchases.length,
 
-          data:
-            purchases,
-        });
+        data:
+          purchases,
+      });
     } catch (error) {
       console.error(
         "Get buyer purchases error:",
         error
       );
 
-      return res
-        .status(500)
-        .json({
-          success: false,
+      return res.status(500).json({
+        success: false,
+        message:
+          "Failed to load purchases.",
+      });
+    }
+  }
+);
 
+/**
+ * GET ARTIST SALES
+ * Artist only
+ */
+router.get(
+  "/artist/:email",
+  requireAuth,
+  requireRole("artist"),
+  async (req, res) => {
+    try {
+      const sessionEmail =
+        req.auth.user.email
+          .trim()
+          .toLowerCase();
+
+      const requestedEmail =
+        req.params.email
+          .trim()
+          .toLowerCase();
+
+      if (
+        sessionEmail !==
+        requestedEmail
+      ) {
+        return res.status(403).json({
+          success: false,
           message:
-            error?.message ||
-            "Failed to load purchases.",
+            "You can only view your own sales.",
         });
+      }
+
+      const purchasesCollection =
+        getPurchasesCollection();
+
+      const sales =
+        await purchasesCollection
+          .find({
+            artistEmail:
+              sessionEmail,
+
+            paymentStatus:
+              "paid",
+          })
+          .sort({
+            purchasedAt: -1,
+          })
+          .toArray();
+
+      const totalRevenue =
+        sales.reduce(
+          (total, sale) =>
+            total +
+            Number(
+              sale.amount || 0
+            ),
+          0
+        );
+
+      return res.status(200).json({
+        success: true,
+
+        count:
+          sales.length,
+
+        totalRevenue,
+
+        data:
+          sales,
+      });
+    } catch (error) {
+      console.error(
+        "Get artist sales error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+
+        message:
+          "Failed to load artist sales.",
+      });
     }
   }
 );
