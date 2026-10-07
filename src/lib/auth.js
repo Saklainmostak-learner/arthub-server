@@ -9,53 +9,46 @@ export function createAuth() {
   return betterAuth({
     database: mongodbAdapter(db),
 
-    secret:
-      process.env.BETTER_AUTH_SECRET,
+    secret: process.env.BETTER_AUTH_SECRET,
 
-    /*
-     * IMPORTANT:
-     *
-     * Auth requests are proxied through the
-     * Next.js frontend:
-     *
-     * https://arthub-client-sigma.vercel.app/api/auth/*
-     *
-     * So Better Auth must build OAuth callback
-     * URLs from the forwarded Vercel host instead
-     * of hardcoding the Render server URL.
-     */
+    baseURL: {
+      allowedHosts: [
+        "arthub-client-sigma.vercel.app",
+        "arthub-client-*.vercel.app",
+        "localhost:3000",
+      ],
+
+      protocol:
+        process.env.NODE_ENV === "production"
+          ? "https"
+          : "auto",
+
+      fallback:
+        process.env.NODE_ENV === "production"
+          ? "https://arthub-client-sigma.vercel.app"
+          : "http://localhost:3000",
+    },
+
     trustedOrigins: [
-      process.env.CLIENT_URL ||
-        "http://localhost:3000",
-
-      "http://localhost:3000",
-
-      "http://localhost:5000",
-
       "https://arthub-client-sigma.vercel.app",
-
       "https://arthub-client-*.vercel.app",
+      "http://localhost:3000",
+      "http://localhost:5000",
     ],
 
     advanced: {
       trustedProxyHeaders: true,
 
       useSecureCookies:
-        process.env.NODE_ENV ===
-        "production",
+        process.env.NODE_ENV === "production",
 
       defaultCookieAttributes: {
         httpOnly: true,
 
         secure:
-          process.env.NODE_ENV ===
-          "production",
+          process.env.NODE_ENV === "production",
 
-        sameSite:
-          process.env.NODE_ENV ===
-          "production"
-            ? "lax"
-            : "lax",
+        sameSite: "lax",
       },
     },
 
@@ -69,8 +62,12 @@ export function createAuth() {
           process.env.GOOGLE_CLIENT_ID,
 
         clientSecret:
-          process.env
-            .GOOGLE_CLIENT_SECRET,
+          process.env.GOOGLE_CLIENT_SECRET,
+
+        redirectURI:
+          process.env.NODE_ENV === "production"
+            ? "https://arthub-client-sigma.vercel.app/api/auth/callback/google"
+            : "http://localhost:3000/api/auth/callback/google",
       },
     },
 
