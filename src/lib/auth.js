@@ -9,12 +9,21 @@ export function createAuth() {
   return betterAuth({
     database: mongodbAdapter(db),
 
-    secret: process.env.BETTER_AUTH_SECRET,
+    secret:
+      process.env.BETTER_AUTH_SECRET,
 
-    baseURL:
-      process.env.BETTER_AUTH_URL ||
-      "http://localhost:5000",
-
+    /*
+     * IMPORTANT:
+     *
+     * Auth requests are proxied through the
+     * Next.js frontend:
+     *
+     * https://arthub-client-sigma.vercel.app/api/auth/*
+     *
+     * So Better Auth must build OAuth callback
+     * URLs from the forwarded Vercel host instead
+     * of hardcoding the Render server URL.
+     */
     trustedOrigins: [
       process.env.CLIENT_URL ||
         "http://localhost:3000",
@@ -29,6 +38,8 @@ export function createAuth() {
     ],
 
     advanced: {
+      trustedProxyHeaders: true,
+
       useSecureCookies:
         process.env.NODE_ENV ===
         "production",
@@ -43,7 +54,7 @@ export function createAuth() {
         sameSite:
           process.env.NODE_ENV ===
           "production"
-            ? "none"
+            ? "lax"
             : "lax",
       },
     },
@@ -63,18 +74,6 @@ export function createAuth() {
       },
     },
 
-    /*
-     * SECURITY:
-     *
-     * Collector and Artist are public
-     * registration roles.
-     *
-     * Admin is never accepted from
-     * public signup input.
-     *
-     * Admin promotion is handled by
-     * the protected Admin API.
-     */
     databaseHooks: {
       user: {
         create: {
@@ -95,22 +94,14 @@ export function createAuth() {
 
         update: {
           before: async (userData) => {
-            /*
-             * Prevent Better Auth's
-             * normal user-update flow
-             * from changing roles.
-             *
-             * Admin role changes are
-             * performed directly by
-             * the protected admin API.
-             */
             const {
               role: _role,
               ...safeUserData
             } = userData;
 
             return {
-              data: safeUserData,
+              data:
+                safeUserData,
             };
           },
         },
@@ -130,14 +121,6 @@ export function createAuth() {
 
           defaultValue: "user",
 
-          /*
-           * The public registration UI
-           * sends user/artist.
-           *
-           * databaseHooks above validates
-           * the value before storage and
-           * never permits admin signup.
-           */
           input: true,
         },
       },
