@@ -326,10 +326,12 @@ router.delete(
       const sessionsCollection =
         db.collection("session");
 
+      const userObjectId =
+        new ObjectId(id);
+
       const user =
         await usersCollection.findOne({
-          _id:
-            new ObjectId(id),
+          _id: userObjectId,
         });
 
       if (!user) {
@@ -340,28 +342,41 @@ router.delete(
         });
       }
 
+      /*
+       * Better Auth stores userId as ObjectId
+       * with the MongoDB adapter.
+       *
+       * The string version is also included
+       * to safely clean up any older records.
+       */
+      const authUserFilter = {
+        userId: {
+          $in: [
+            userObjectId,
+            id,
+          ],
+        },
+      };
+
       await Promise.all([
-        usersCollection.deleteOne({
-          _id:
-            new ObjectId(id),
-        }),
+        accountsCollection.deleteMany(
+          authUserFilter
+        ),
 
-        accountsCollection.deleteMany({
-          userId:
-            id,
-        }),
-
-        sessionsCollection.deleteMany({
-          userId:
-            id,
-        }),
+        sessionsCollection.deleteMany(
+          authUserFilter
+        ),
       ]);
+
+      await usersCollection.deleteOne({
+        _id: userObjectId,
+      });
 
       return res.status(200).json({
         success: true,
 
         message:
-          "User deleted successfully.",
+          "User and authentication records deleted successfully.",
       });
     } catch (error) {
       console.error(
@@ -381,6 +396,7 @@ router.delete(
 
 /**
  * GET ALL ARTWORKS
+ * GET /admin/artworks
  */
 router.get(
   "/artworks",
@@ -419,6 +435,7 @@ router.get(
 
 /**
  * ADMIN DELETE ARTWORK
+ * DELETE /admin/artworks/:id
  */
 router.delete(
   "/artworks/:id",
@@ -481,6 +498,7 @@ router.delete(
 
 /**
  * GET ALL TRANSACTIONS
+ * GET /admin/transactions
  */
 router.get(
   "/transactions",
