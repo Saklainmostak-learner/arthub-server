@@ -6,30 +6,33 @@ import { getDatabase } from "../config/db.js";
 export function createAuth() {
   const db = getDatabase();
 
+  const appUrl =
+    process.env.CLIENT_URL ||
+    "http://localhost:3000";
+
   return betterAuth({
     database: mongodbAdapter(db),
 
     secret: process.env.BETTER_AUTH_SECRET,
 
-    baseURL:
-      process.env.NODE_ENV === "production"
-        ? "https://arthub-client-sigma.vercel.app"
-        : "http://localhost:5000",
+    baseURL: appUrl,
 
     trustedOrigins: [
-      "https://arthub-client-sigma.vercel.app",
+      appUrl,
       "http://localhost:3000",
       "http://localhost:5000",
     ],
 
     advanced: {
       useSecureCookies:
-        process.env.NODE_ENV === "production",
+        appUrl.startsWith("https://"),
 
       defaultCookieAttributes: {
         httpOnly: true,
+
         secure:
-          process.env.NODE_ENV === "production",
+          appUrl.startsWith("https://"),
+
         sameSite: "lax",
       },
     },
