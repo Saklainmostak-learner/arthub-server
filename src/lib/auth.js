@@ -20,7 +20,18 @@ export function createAuth() {
         "http://localhost:3000",
       "http://localhost:3000",
       "http://localhost:5000",
+      "https://arthub-client-sigma.vercel.app",
     ],
+
+    advanced: {
+      useSecureCookies: true,
+
+      defaultCookieAttributes: {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none",
+      },
+    },
 
     emailAndPassword: {
       enabled: true,
