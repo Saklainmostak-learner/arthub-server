@@ -13,7 +13,8 @@ export function createAuth() {
   return betterAuth({
     database: mongodbAdapter(db),
 
-    secret: process.env.BETTER_AUTH_SECRET,
+    secret:
+      process.env.BETTER_AUTH_SECRET,
 
     baseURL: appUrl,
 
@@ -41,13 +42,27 @@ export function createAuth() {
       enabled: true,
     },
 
+    account: {
+      accountLinking: {
+        enabled: true,
+
+        trustedProviders: [
+          "google",
+        ],
+      },
+    },
+
     socialProviders: {
       google: {
         clientId:
           process.env.GOOGLE_CLIENT_ID,
 
         clientSecret:
-          process.env.GOOGLE_CLIENT_SECRET,
+          process.env
+            .GOOGLE_CLIENT_SECRET,
+
+        prompt:
+          "select_account",
       },
     },
 
@@ -70,14 +85,17 @@ export function createAuth() {
         },
 
         update: {
-          before: async (userData) => {
+          before: async (
+            userData
+          ) => {
             const {
               role: _role,
               ...safeUserData
             } = userData;
 
             return {
-              data: safeUserData,
+              data:
+                safeUserData,
             };
           },
         },
@@ -95,7 +113,8 @@ export function createAuth() {
 
           required: false,
 
-          defaultValue: "user",
+          defaultValue:
+            "user",
 
           input: true,
         },
